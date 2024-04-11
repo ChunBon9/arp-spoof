@@ -1,4 +1,4 @@
-LDLIBS=-lpcap
+LDLIBS=-lpcap -pthread
 
 all: arp-spoof
 

