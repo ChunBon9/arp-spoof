@@ -103,12 +103,12 @@ int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Mac *sm, Ip *si, Ma
 
 int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {	
 	for(int i=0; i<=cnt; i++) {
-		if((packet->eth_.smac_ == sm[i]) && (ntohl(*((uint32_t *)((uint8_t *)packet + 30))) == ti[i])) {
-			packet->eth_.dmac_ = tm[i];
+		if((packet->eth_.smac_ == tm[i]) &&  (ntohl(*((uint32_t *)((uint8_t *)packet + 30))) == si[i])) {
+			packet->eth_.dmac_ = sm[i];
 			packet->eth_.smac_ = mm;
 		}
-		else if((packet->eth_.smac_ == tm[i]) &&  (ntohl(*((uint32_t *)((uint8_t *)packet + 30))) == si[i])) {
-			packet->eth_.dmac_ = sm[i];
+		else if(packet->eth_.smac_ == sm[i]) {
+			packet->eth_.dmac_ = tm[i];
 			packet->eth_.smac_ = mm;
 		}
 		else continue;
