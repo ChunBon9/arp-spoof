@@ -96,10 +96,7 @@ void get_mac_addr(pcap_t* handle, EthArpPacket *packet, Mac *sm, Ip si, Mac mm, 
 }
 
 int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Mac sm, Ip si, Mac tm, Ip ti, Mac mm) {
-	make_packet(packet, sm, mm, mm, ti, sm, si, 0);
-	if(!(send_packet(handle, packet, sizeof(EthArpPacket)))) return 0;
-	make_packet(packet, tm, mm, mm, si, tm, ti, 0);
-	return send_packet(handle, packet, sizeof(EthArpPacket));
+	return make_packet(packet, sm, mm, mm, ti, sm, si, 0);
 }
 
 
