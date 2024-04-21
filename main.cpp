@@ -107,7 +107,7 @@ int arp_cache_poisoning(pcap_t* handle, EthArpPacket *packet, Flow *flow, Mac mm
 
 int check_arp_recover(pcap_t* handle, EthArpPacket *packet , Flow *flow, Mac mm, int cnt) {
 	for(int i=0; i<=cnt; i++) {
-		if((ntohl(packet->arp_.tip_) == flow[i].sender_ip) && (ntohl(packet->arp_.tip_) == flow[i].target_ip) || (ntohl(packet->arp_.tip_) == flow[i].target_ip) && (ntohl(packet->arp_.tip_) == flow[i].sender_ip)) {
+		if((ntohl(packet->arp_.sip_) == flow[i].sender_ip) && (ntohl(packet->arp_.tip_) == flow[i].target_ip) || (ntohl(packet->arp_.sip_) == flow[i].target_ip) && (ntohl(packet->arp_.tip_) == flow[i].sender_ip)) {
 			
 			for(int j=0; j<5; j++) {
 				if(!(arp_cache_poisoning(handle, packet, &(flow[i]), mm))) return 0;
